@@ -11,14 +11,13 @@ const W = 720;
 const H = 720;
 const TARGET_RED = 3;
 const BASE_BALL_SPEED = 8.4;
-const MAX_BALL_SPEED = 20;
-const SPEED_GROWTH = 1.09;
-const COLORS = ["#ff9f43", "#ffd166", "#54a0ff", "#46d39a", "#a78bfa", "#d89b6b"];
+const COLORS = ["#ff9f43", "#ffd166", "#54a0ff", "#46d39a", "#a78bfa"];
+const RED = "#ff5364";
 const FIREWORK_COLORS = ["#2563eb", "#ef4444", "#f59e0b", "#10b981", "#8b5cf6"];
-const FIREWORKS = Array.from({ length: 32 }, (_, index) => {
-  const angle = (index % 16) * Math.PI / 8;
-  const distance = 90 + (index % 4) * 16;
-  return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance, delay: (index % 5) * .07, burst: Math.floor(index / 16), color: FIREWORK_COLORS[index % FIREWORK_COLORS.length] };
+const FIREWORKS = Array.from({ length: 72 }, (_, index) => {
+  const angle = (index % 24) * Math.PI / 12;
+  const distance = 120 + (index % 6) * 18;
+  return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance, delay: (index % 6) * .035, burst: Math.floor(index / 24), color: FIREWORK_COLORS[index % FIREWORK_COLORS.length] };
 });
 
 function formatTime(ms: number) {
@@ -31,14 +30,25 @@ function numericTime(value: string) {
   return Number(m) * 60 + Number(s);
 }
 
-function makeBricks(): Brick[] {
+function makeBricks(testMode = false): Brick[] {
   const redIndexes = new Set<number>();
-  while (redIndexes.size < 12) redIndexes.add(Math.floor(Math.random() * 40));
+  let colors: string[];
+  if (testMode) {
+    while (redIndexes.size < 12) redIndexes.add(Math.floor(Math.random() * 40));
+    colors = Array.from({ length: 40 }, (_, i) => redIndexes.has(i) ? RED : COLORS[Math.floor(Math.random() * COLORS.length)]);
+  } else {
+    const palette = [RED, ...COLORS];
+    do {
+      colors = Array.from({ length: 40 }, () => palette[Math.floor(Math.random() * palette.length)]);
+    } while (colors.filter((color) => color === RED).length < TARGET_RED);
+    colors.forEach((color, i) => { if (color === RED) redIndexes.add(i); });
+  }
   return Array.from({ length: 40 }, (_, i) => {
     const col = i % 8;
     const row = Math.floor(i / 8);
-    const red = redIndexes.has(i);
-    return { x: 32 + col * 82, y: 88 + row * 40, w: 72, h: 27, red, alive: true, color: red ? "#ff5364" : COLORS[Math.floor(Math.random() * COLORS.length)] };
+    const color = colors[i];
+    const red = color === RED;
+    return { x: 32 + col * 82, y: 88 + row * 40, w: 72, h: 27, red, alive: true, color };
   });
 }
 
@@ -62,6 +72,8 @@ export default function BreakoutGame() {
   const [elapsed, setElapsed] = useState(0);
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [recordState, setRecordState] = useState("");
+  const [testMode, setTestMode] = useState(false);
+  const [redHitFeedback, setRedHitFeedback] = useState(false);
 
   const setScreen = useCallback((next: Screen) => {
     screenRef.current = next;
@@ -85,8 +97,7 @@ export default function BreakoutGame() {
 
   const resetBall = useCallback(() => {
     const game = stateRef.current;
-    const destroyed = game.bricks.filter((brick) => !brick.alive).length;
-    const speed = Math.min(MAX_BALL_SPEED, BASE_BALL_SPEED * SPEED_GROWTH ** destroyed);
+    const speed = BASE_BALL_SPEED;
     game.paddleX = W / 2 - 70;
     game.ballX = W / 2;
     game.ballY = H - 100;
@@ -96,7 +107,7 @@ export default function BreakoutGame() {
 
   const beginGame = useCallback(() => {
     const game = stateRef.current;
-    game.bricks = makeBricks();
+    game.bricks = makeBricks(testMode);
     game.lives = 3;
     game.red = 0;
     pausedTotalRef.current = 0;
@@ -114,7 +125,7 @@ export default function BreakoutGame() {
         audioRef.current?.play().catch(() => undefined);
       } else setCountdown(value);
     }, 700);
-  }, [resetBall, setScreen]);
+  }, [resetBall, setScreen, testMode]);
 
   const onStart = (event: FormEvent) => {
     event.preventDefault();
@@ -123,6 +134,11 @@ export default function BreakoutGame() {
     const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (AudioCtx && !audioContextRef.current) audioContextRef.current = new AudioCtx();
     audioContextRef.current?.resume().catch(() => undefined);
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.volume = .52;
+      audioRef.current.play().catch(() => undefined);
+    }
     nameRef.current = clean;
     beginGame();
   };
@@ -151,11 +167,24 @@ export default function BreakoutGame() {
     const ctx = audioContextRef.current ?? new AudioCtx();
     audioContextRef.current = ctx;
     if (ctx.state === "suspended") ctx.resume().catch(() => undefined);
-    const osc = ctx.createOscillator(); const gain = ctx.createGain();
-    osc.type = "square";
-    osc.frequency.setValueAtTime(420, ctx.currentTime); osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + .1);
-    gain.gain.setValueAtTime(.22, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + .11);
-    osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + .12);
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.setValueAtTime(-8, now);
+    compressor.knee.setValueAtTime(4, now);
+    compressor.ratio.setValueAtTime(10, now);
+    compressor.attack.setValueAtTime(.001, now);
+    compressor.release.setValueAtTime(.08, now);
+    gain.gain.setValueAtTime(.78, now);
+    gain.gain.setValueAtTime(.78, now + .055);
+    gain.gain.exponentialRampToValueAtTime(.001, now + .16);
+    gain.connect(compressor); compressor.connect(ctx.destination);
+    [960, 1280].forEach((frequency, index) => {
+      const osc = ctx.createOscillator();
+      osc.type = index === 0 ? "square" : "sine";
+      osc.frequency.setValueAtTime(frequency, now);
+      osc.connect(gain); osc.start(now); osc.stop(now + .17);
+    });
   }, []);
 
   useEffect(() => {
@@ -180,7 +209,7 @@ export default function BreakoutGame() {
         game.paddleX = Math.max(0, Math.min(W - 140, game.paddleX));
         game.ballX += game.vx; game.ballY += game.vy;
         if (game.ballX < 9 || game.ballX > W - 9) { game.vx *= -1; game.ballX = Math.max(9, Math.min(W - 9, game.ballX)); }
-        if (game.ballY < 9) { game.vy = Math.abs(game.vy); game.ballY = 9; }
+        let hitBrick = false;
         if (game.vy > 0 && game.ballY + 9 >= H - 55 && game.ballY - 9 <= H - 39 && game.ballX >= game.paddleX && game.ballX <= game.paddleX + 140) {
           const offset = (game.ballX - (game.paddleX + 70)) / 70;
           const speed = Math.hypot(game.vx, game.vy);
@@ -190,15 +219,27 @@ export default function BreakoutGame() {
         }
         for (const brick of game.bricks) if (brick.alive && game.ballX + 9 > brick.x && game.ballX - 9 < brick.x + brick.w && game.ballY + 9 > brick.y && game.ballY - 9 < brick.y + brick.h) {
           brick.alive = false;
-          const destroyed = game.bricks.filter((item) => !item.alive).length;
-          const nextSpeed = Math.min(MAX_BALL_SPEED, BASE_BALL_SPEED * SPEED_GROWTH ** destroyed);
-          const currentSpeed = Math.max(.001, Math.hypot(game.vx, game.vy));
-          game.vx = game.vx / currentSpeed * nextSpeed;
-          game.vy = game.vy / currentSpeed * -nextSpeed;
+          if (game.vy > 0) {
+            game.ballY = brick.y - 9;
+            game.vy = -Math.abs(game.vy);
+          } else {
+            game.ballY = brick.y + brick.h + 9;
+            game.vy = Math.abs(game.vy);
+          }
+          hitBrick = true;
           hitSound();
-          if (brick.red) { game.red += 1; setRedCount(game.red); if (game.red >= TARGET_RED) finish(); }
+          if (brick.red) {
+            game.red += 1;
+            setRedCount(game.red);
+            if (game.red < TARGET_RED) {
+              setRedHitFeedback(true);
+              window.setTimeout(() => setRedHitFeedback(false), 700);
+            }
+            if (game.red >= TARGET_RED) finish();
+          }
           break;
         }
+        if (!hitBrick && game.ballY < 97) { game.vy = Math.abs(game.vy); game.ballY = 97; }
         if (game.ballY > H + 12) {
           game.lives -= 1; setLives(game.lives);
           if (game.lives <= 0) { setScreen("LOST"); audioRef.current?.pause(); }
@@ -213,7 +254,20 @@ export default function BreakoutGame() {
 
   const togglePause = useCallback(() => {
     if (screenRef.current === "PLAYING") { pausedAtRef.current = performance.now(); setScreen("PAUSED"); audioRef.current?.pause(); }
-    else if (screenRef.current === "PAUSED") { pausedTotalRef.current += performance.now() - pausedAtRef.current; setScreen("PLAYING"); audioRef.current?.play().catch(() => undefined); }
+    else if (screenRef.current === "PAUSED") {
+      setCountdown(3);
+      setScreen("COUNTDOWN");
+      let value = 3;
+      const timer = window.setInterval(() => {
+        value -= 1;
+        if (value === 0) {
+          window.clearInterval(timer);
+          pausedTotalRef.current += performance.now() - pausedAtRef.current;
+          setScreen("PLAYING");
+          audioRef.current?.play().catch(() => undefined);
+        } else setCountdown(value);
+      }, 700);
+    }
   }, [setScreen]);
 
   useEffect(() => {
@@ -245,6 +299,7 @@ export default function BreakoutGame() {
       </header>
       <div className="stage" onPointerMove={(e) => movePointer(e.clientX)}>
         <canvas ref={canvasRef} width={W} height={H} aria-label="벽돌깨기 게임 화면" />
+        {redHitFeedback && <div className="hit-feedback" aria-live="polite"><svg viewBox="0 0 24 24" role="img" aria-label="좋아요"><path d="M7.2 10.2v10.1H4.9a1.9 1.9 0 0 1-1.9-1.9v-6.3a1.9 1.9 0 0 1 1.9-1.9h2.3Zm2 10.1V10.2l3.7-7.1a1.5 1.5 0 0 1 2.8.8v4.1h3.7a2.4 2.4 0 0 1 2.3 2.9l-1.4 7.3a2.7 2.7 0 0 1-2.7 2.2H9.2Z" /></svg></div>}
         {screen === "START" && <div className="overlay start-panel">
           <Image src="/Mascot.jpg" width={92} height={92} priority alt="인천대학교 마스코트 횃불이" />
           <h1>INU <em>벽돌깨기</em></h1>
@@ -254,13 +309,14 @@ export default function BreakoutGame() {
             <input id="player-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={20} placeholder="이름을 입력하세요" autoComplete="off" />
             <button className="primary" type="submit" disabled={!name.trim()}>▶ 게임 시작</button>
           </form>
+          <button className={`test-toggle ${testMode ? "active" : ""}`} type="button" aria-pressed={testMode} onClick={() => setTestMode((current) => !current)}><span />테스트 모드 {testMode ? "ON · 빨강 30% 고정" : "OFF"}</button>
           <div className="ranking"><h2>🏆 TOP 3</h2>{Array.from({ length: 3 }, (_, i) => records[i] ? <div key={`${records[i].name}-${i}`}><span><i>{i + 1}</i>{records[i].name}</span><b>{records[i].finishTime}</b></div> : <div className="empty" key={i}><span><i>{i + 1}</i>아직 기록 없음</span><b>--:--</b></div>)}</div>
-          <div className="maker"><b>정보통신공학과 · 학번 입력 · 김성연</b></div>
+          <div className="maker"><b>데이터과학과 · 202601659 · 김성연</b></div>
         </div>}
         {screen === "COUNTDOWN" && <div className="overlay countdown"><span>READY</span><strong key={countdown}>{countdown}</strong><p>방향키 또는 스와이프로 이동</p></div>}
         {screen === "PAUSED" && <div className="overlay modal"><span className="badge">BREAK TIME</span><h2>일시정지</h2><p>잠시 숨을 고르고 다시 시작하세요.</p><button className="primary" onClick={togglePause}>▶ 계속하기</button></div>}
-        {screen === "LOST" && <div className="overlay modal"><span className="danger">MISSION FAILED</span><h2>GAME OVER</h2><p>공을 모두 놓쳤습니다. 다시 도전해 보세요!</p><button className="primary" onClick={beginGame}>↻ 다시 도전</button><button className="ghost" onClick={goStart}>처음 화면</button></div>}
-        {screen === "WON" && <div className="overlay modal win"><div className="fireworks" aria-hidden="true">{FIREWORKS.map((particle, i) => <span key={i} className={`burst-${particle.burst}`} style={{ "--x": `${particle.x}px`, "--y": `${particle.y}px`, "--delay": `${particle.delay}s`, "--color": particle.color } as CSSProperties} />)}</div><span className="success">MISSION COMPLETE</span><h2>완벽합니다!</h2><strong className="finish-time">{formatTime(elapsed)}</strong><p>{name}님의 완주 기록</p><small>{recordState}</small><button className="primary" onClick={beginGame}>↻ 다시 도전</button><button className="ghost" onClick={goStart}>TOP 3 보기</button></div>}
+        {screen === "LOST" && <div className="overlay modal"><span className="danger">MISSION FAILED</span><h2>GAME OVER</h2><p>공을 모두 놓쳤습니다. 다시 도전해 보세요!</p><button className="primary" onClick={goStart}>↻ 다시 도전</button><button className="ghost" onClick={goStart}>처음 화면</button></div>}
+        {screen === "WON" && <div className="overlay modal win"><div className="fireworks" aria-hidden="true">{FIREWORKS.map((particle, i) => <span key={i} className={`burst-${particle.burst}`} style={{ "--x": `${particle.x}px`, "--y": `${particle.y}px`, "--delay": `${particle.delay}s`, "--color": particle.color } as CSSProperties} />)}</div><span className="success">MISSION COMPLETE</span><h2>완벽합니다!</h2><strong className="finish-time">{formatTime(elapsed)}</strong><p>{name}님의 완주 기록</p><small>{recordState}</small><button className="primary" onClick={goStart}>↻ 다시 도전</button></div>}
       </div>
       {(screen === "PLAYING" || screen === "PAUSED") && <footer className="controls"><button onClick={togglePause}>{screen === "PAUSED" ? "▶ 계속" : "Ⅱ 멈춤"}</button><span>← → 키 / 화면 스와이프</span><button onClick={goStart}>■ 종료</button></footer>}
     </section>
