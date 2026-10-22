@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { CSSProperties, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 
 type Screen = "START" | "COUNTDOWN" | "PLAYING" | "PAUSED" | "WON" | "LOST";
@@ -10,10 +10,16 @@ type RecordItem = { name: string; finishTime: string; milliseconds?: number };
 const W = 720;
 const H = 720;
 const TARGET_RED = 3;
-const BASE_BALL_SPEED = 10.5;
-const MAX_BALL_SPEED = 26;
-const SPEED_GROWTH = 1.12;
+const BASE_BALL_SPEED = 8.4;
+const MAX_BALL_SPEED = 20;
+const SPEED_GROWTH = 1.09;
 const COLORS = ["#ff9f43", "#ffd166", "#54a0ff", "#46d39a", "#a78bfa", "#d89b6b"];
+const FIREWORK_COLORS = ["#2563eb", "#ef4444", "#f59e0b", "#10b981", "#8b5cf6"];
+const FIREWORKS = Array.from({ length: 32 }, (_, index) => {
+  const angle = (index % 16) * Math.PI / 8;
+  const distance = 90 + (index % 4) * 16;
+  return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance, delay: (index % 5) * .07, burst: Math.floor(index / 16), color: FIREWORK_COLORS[index % FIREWORK_COLORS.length] };
+});
 
 function formatTime(ms: number) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -42,10 +48,11 @@ export default function BreakoutGame() {
   const nameRef = useRef("");
   const rafRef = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const startAtRef = useRef(0);
   const pausedAtRef = useRef(0);
   const pausedTotalRef = useRef(0);
-  const stateRef = useRef({ paddleX: W / 2 - 70, ballX: W / 2, ballY: H - 100, vx: 6.6, vy: -8.2, lives: 3, red: 0, bricks: makeBricks(), keys: { left: false, right: false } });
+  const stateRef = useRef({ paddleX: W / 2 - 70, ballX: W / 2, ballY: H - 100, vx: 5.3, vy: -6.6, lives: 3, red: 0, bricks: makeBricks(), keys: { left: false, right: false } });
 
   const [screen, setScreenState] = useState<Screen>("START");
   const [name, setName] = useState("");
@@ -113,6 +120,9 @@ export default function BreakoutGame() {
     event.preventDefault();
     const clean = name.trim();
     if (!clean) return;
+    const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (AudioCtx && !audioContextRef.current) audioContextRef.current = new AudioCtx();
+    audioContextRef.current?.resume().catch(() => undefined);
     nameRef.current = clean;
     beginGame();
   };
@@ -138,10 +148,14 @@ export default function BreakoutGame() {
   const hitSound = useCallback(() => {
     const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
-    const ctx = new AudioCtx(); const osc = ctx.createOscillator(); const gain = ctx.createGain();
-    osc.frequency.setValueAtTime(280, ctx.currentTime); osc.frequency.exponentialRampToValueAtTime(90, ctx.currentTime + .08);
-    gain.gain.setValueAtTime(.12, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + .09);
-    osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + .1);
+    const ctx = audioContextRef.current ?? new AudioCtx();
+    audioContextRef.current = ctx;
+    if (ctx.state === "suspended") ctx.resume().catch(() => undefined);
+    const osc = ctx.createOscillator(); const gain = ctx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(420, ctx.currentTime); osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + .1);
+    gain.gain.setValueAtTime(.22, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + .11);
+    osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + .12);
   }, []);
 
   useEffect(() => {
@@ -233,20 +247,20 @@ export default function BreakoutGame() {
         <canvas ref={canvasRef} width={W} height={H} aria-label="벽돌깨기 게임 화면" />
         {screen === "START" && <div className="overlay start-panel">
           <Image src="/Mascot.jpg" width={92} height={92} priority alt="인천대학교 마스코트 횃불이" />
-          <h1>INU <em>BREAKOUT</em></h1>
+          <h1>INU <em>벽돌깨기</em></h1>
           <p>빨간 벽돌 3개를 찾아 깨보세요.</p>
           <form onSubmit={onStart}>
             <label htmlFor="player-name" className="sr-only">플레이어 이름</label>
             <input id="player-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={20} placeholder="이름을 입력하세요" autoComplete="off" />
             <button className="primary" type="submit" disabled={!name.trim()}>▶ 게임 시작</button>
           </form>
+          <div className="ranking"><h2>🏆 TOP 3</h2>{Array.from({ length: 3 }, (_, i) => records[i] ? <div key={`${records[i].name}-${i}`}><span><i>{i + 1}</i>{records[i].name}</span><b>{records[i].finishTime}</b></div> : <div className="empty" key={i}><span><i>{i + 1}</i>아직 기록 없음</span><b>--:--</b></div>)}</div>
           <div className="maker"><b>정보통신공학과 · 학번 입력 · 김성연</b></div>
-          {records.length > 0 && <div className="ranking"><h2>🏆 TOP 3</h2>{records.map((r, i) => <div key={`${r.name}-${i}`}><span>{i + 1}. {r.name}</span><b>{r.finishTime}</b></div>)}</div>}
         </div>}
         {screen === "COUNTDOWN" && <div className="overlay countdown"><span>READY</span><strong key={countdown}>{countdown}</strong><p>방향키 또는 스와이프로 이동</p></div>}
         {screen === "PAUSED" && <div className="overlay modal"><span className="badge">BREAK TIME</span><h2>일시정지</h2><p>잠시 숨을 고르고 다시 시작하세요.</p><button className="primary" onClick={togglePause}>▶ 계속하기</button></div>}
         {screen === "LOST" && <div className="overlay modal"><span className="danger">MISSION FAILED</span><h2>GAME OVER</h2><p>공을 모두 놓쳤습니다. 다시 도전해 보세요!</p><button className="primary" onClick={beginGame}>↻ 다시 도전</button><button className="ghost" onClick={goStart}>처음 화면</button></div>}
-        {screen === "WON" && <div className="overlay modal win"><div className="confetti">✦ ✧ ✦ ✧ ✦</div><span className="success">MISSION COMPLETE</span><h2>완벽합니다!</h2><strong className="finish-time">{formatTime(elapsed)}</strong><p>{name}님의 완주 기록</p><small>{recordState}</small><button className="primary" onClick={beginGame}>↻ 다시 도전</button><button className="ghost" onClick={goStart}>TOP 3 보기</button></div>}
+        {screen === "WON" && <div className="overlay modal win"><div className="fireworks" aria-hidden="true">{FIREWORKS.map((particle, i) => <span key={i} className={`burst-${particle.burst}`} style={{ "--x": `${particle.x}px`, "--y": `${particle.y}px`, "--delay": `${particle.delay}s`, "--color": particle.color } as CSSProperties} />)}</div><span className="success">MISSION COMPLETE</span><h2>완벽합니다!</h2><strong className="finish-time">{formatTime(elapsed)}</strong><p>{name}님의 완주 기록</p><small>{recordState}</small><button className="primary" onClick={beginGame}>↻ 다시 도전</button><button className="ghost" onClick={goStart}>TOP 3 보기</button></div>}
       </div>
       {(screen === "PLAYING" || screen === "PAUSED") && <footer className="controls"><button onClick={togglePause}>{screen === "PAUSED" ? "▶ 계속" : "Ⅱ 멈춤"}</button><span>← → 키 / 화면 스와이프</span><button onClick={goStart}>■ 종료</button></footer>}
     </section>
