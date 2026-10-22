@@ -2,3 +2,5 @@
 /.next
 /.env.local
 .DS_Store
+.clasp.json
+.vercel

@@ -10,6 +10,9 @@ type RecordItem = { name: string; finishTime: string; milliseconds?: number };
 const W = 720;
 const H = 720;
 const TARGET_RED = 3;
+const BASE_BALL_SPEED = 10.5;
+const MAX_BALL_SPEED = 26;
+const SPEED_GROWTH = 1.12;
 const COLORS = ["#ff9f43", "#ffd166", "#54a0ff", "#46d39a", "#a78bfa", "#d89b6b"];
 
 function formatTime(ms: number) {
@@ -42,7 +45,7 @@ export default function BreakoutGame() {
   const startAtRef = useRef(0);
   const pausedAtRef = useRef(0);
   const pausedTotalRef = useRef(0);
-  const stateRef = useRef({ paddleX: W / 2 - 70, ballX: W / 2, ballY: H - 100, vx: 4.1, vy: -5.2, lives: 3, red: 0, bricks: makeBricks(), keys: { left: false, right: false } });
+  const stateRef = useRef({ paddleX: W / 2 - 70, ballX: W / 2, ballY: H - 100, vx: 6.6, vy: -8.2, lives: 3, red: 0, bricks: makeBricks(), keys: { left: false, right: false } });
 
   const [screen, setScreenState] = useState<Screen>("START");
   const [name, setName] = useState("");
@@ -75,11 +78,13 @@ export default function BreakoutGame() {
 
   const resetBall = useCallback(() => {
     const game = stateRef.current;
+    const destroyed = game.bricks.filter((brick) => !brick.alive).length;
+    const speed = Math.min(MAX_BALL_SPEED, BASE_BALL_SPEED * SPEED_GROWTH ** destroyed);
     game.paddleX = W / 2 - 70;
     game.ballX = W / 2;
     game.ballY = H - 100;
-    game.vx = (Math.random() > .5 ? 1 : -1) * 4.1;
-    game.vy = -5.2;
+    game.vx = (Math.random() > .5 ? 1 : -1) * speed * .62;
+    game.vy = -speed * .78;
   }, []);
 
   const beginGame = useCallback(() => {
@@ -147,14 +152,14 @@ export default function BreakoutGame() {
     const draw = () => {
       const game = stateRef.current;
       ctx.clearRect(0, 0, W, H);
-      const grad = ctx.createLinearGradient(0, 0, 0, H); grad.addColorStop(0, "#071a36"); grad.addColorStop(1, "#030817"); ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
-      ctx.globalAlpha = .3; ctx.fillStyle = "#65cfff"; for (let i = 0; i < 45; i++) ctx.fillRect((i * 137) % W, (i * 83) % H, 2, 2); ctx.globalAlpha = 1;
+      ctx.fillStyle = "#f8fafc"; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = "#e8edf4"; ctx.lineWidth = 1; for (let y = 0; y < H; y += 48) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
       for (const brick of game.bricks) if (brick.alive) {
         ctx.shadowColor = brick.color; ctx.shadowBlur = 10; ctx.fillStyle = brick.color; ctx.beginPath(); ctx.roundRect(brick.x, brick.y, brick.w, brick.h, 7); ctx.fill();
         ctx.fillStyle = "rgba(255,255,255,.34)"; ctx.fillRect(brick.x + 8, brick.y + 5, brick.w - 16, 3);
       }
-      ctx.shadowBlur = 18; ctx.shadowColor = "#5ce1ff"; ctx.fillStyle = "#e7fbff"; ctx.beginPath(); ctx.roundRect(game.paddleX, H - 55, 140, 16, 8); ctx.fill();
-      ctx.shadowColor = "#fff"; ctx.shadowBlur = 14; ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(game.ballX, game.ballY, 9, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.shadowBlur = 12; ctx.shadowColor = "#2563eb55"; ctx.fillStyle = "#2563eb"; ctx.beginPath(); ctx.roundRect(game.paddleX, H - 55, 140, 16, 8); ctx.fill();
+      ctx.shadowColor = "#0f172a44"; ctx.shadowBlur = 10; ctx.fillStyle = "#0f172a"; ctx.beginPath(); ctx.arc(game.ballX, game.ballY, 9, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
       if (screenRef.current === "PLAYING") {
         if (game.keys.left) game.paddleX -= 8.5;
         if (game.keys.right) game.paddleX += 8.5;
@@ -163,10 +168,20 @@ export default function BreakoutGame() {
         if (game.ballX < 9 || game.ballX > W - 9) { game.vx *= -1; game.ballX = Math.max(9, Math.min(W - 9, game.ballX)); }
         if (game.ballY < 9) { game.vy = Math.abs(game.vy); game.ballY = 9; }
         if (game.vy > 0 && game.ballY + 9 >= H - 55 && game.ballY - 9 <= H - 39 && game.ballX >= game.paddleX && game.ballX <= game.paddleX + 140) {
-          const offset = (game.ballX - (game.paddleX + 70)) / 70; game.vx = offset * 6.5; game.vy = -Math.abs(game.vy); game.ballY = H - 65;
+          const offset = (game.ballX - (game.paddleX + 70)) / 70;
+          const speed = Math.hypot(game.vx, game.vy);
+          game.vx = offset * speed * .82;
+          game.vy = -Math.sqrt(Math.max(speed ** 2 - game.vx ** 2, speed ** 2 * .32));
+          game.ballY = H - 65;
         }
         for (const brick of game.bricks) if (brick.alive && game.ballX + 9 > brick.x && game.ballX - 9 < brick.x + brick.w && game.ballY + 9 > brick.y && game.ballY - 9 < brick.y + brick.h) {
-          brick.alive = false; game.vy *= -1; hitSound();
+          brick.alive = false;
+          const destroyed = game.bricks.filter((item) => !item.alive).length;
+          const nextSpeed = Math.min(MAX_BALL_SPEED, BASE_BALL_SPEED * SPEED_GROWTH ** destroyed);
+          const currentSpeed = Math.max(.001, Math.hypot(game.vx, game.vy));
+          game.vx = game.vx / currentSpeed * nextSpeed;
+          game.vy = game.vy / currentSpeed * -nextSpeed;
+          hitSound();
           if (brick.red) { game.red += 1; setRedCount(game.red); if (game.red >= TARGET_RED) finish(); }
           break;
         }
@@ -209,7 +224,7 @@ export default function BreakoutGame() {
 
   return <div className="page-shell">
     <audio ref={audioRef} src="/Hyper_Speed_Run.mp3" loop preload="auto" />
-    <section className="game-card">
+    <section className={`game-card ${screen === "START" ? "is-start" : ""}`}>
       <header className="hud">
         <div><span className="eyebrow">INU ARCADE</span><strong>벽돌깨기</strong></div>
         <div className="stats"><span>❤ {lives}</span><span className="red-stat">◆ {redCount}/{TARGET_RED}</span><span>◷ {formatTime(elapsed)}</span></div>
@@ -218,15 +233,14 @@ export default function BreakoutGame() {
         <canvas ref={canvasRef} width={W} height={H} aria-label="벽돌깨기 게임 화면" />
         {screen === "START" && <div className="overlay start-panel">
           <Image src="/Mascot.jpg" width={92} height={92} priority alt="인천대학교 마스코트 횃불이" />
-          <span className="badge">2026 AI CODING MIDTERM</span>
           <h1>INU <em>BREAKOUT</em></h1>
-          <p>빛나는 빨간 벽돌 3개를 깨고<br />최고 기록에 도전하세요!</p>
+          <p>빨간 벽돌 3개를 찾아 깨보세요.</p>
           <form onSubmit={onStart}>
-            <label htmlFor="player-name">플레이어 이름</label>
+            <label htmlFor="player-name" className="sr-only">플레이어 이름</label>
             <input id="player-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={20} placeholder="이름을 입력하세요" autoComplete="off" />
             <button className="primary" type="submit" disabled={!name.trim()}>▶ 게임 시작</button>
           </form>
-          <div className="maker"><span>제작자</span><b>정보통신공학과 · 학번 입력 · 김성연</b></div>
+          <div className="maker"><b>정보통신공학과 · 학번 입력 · 김성연</b></div>
           {records.length > 0 && <div className="ranking"><h2>🏆 TOP 3</h2>{records.map((r, i) => <div key={`${r.name}-${i}`}><span>{i + 1}. {r.name}</span><b>{r.finishTime}</b></div>)}</div>}
         </div>}
         {screen === "COUNTDOWN" && <div className="overlay countdown"><span>READY</span><strong key={countdown}>{countdown}</strong><p>방향키 또는 스와이프로 이동</p></div>}
